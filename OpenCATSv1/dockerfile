@@ -1,0 +1,92 @@
+FROM ubuntu:20.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Create directory before download
+RUN mkdir -p /var/www/opencats
+
+# Create directory before configure MySQL
+RUN mkdir -p /var/lib/mysql
+
+# Install dependencies and clean up
+RUN echo "Installing dependencies and waiting for mysql" \
+    && apt-get update \
+    && apt-get install -y nginx mysql-server php7.4-fpm php7.4-mysql unzip wget \
+    && wget https://raw.githubusercontent.com/vishnubob/wait-for-it/master/wait-for-it.sh \
+    && chmod +x wait-for-it.sh \
+    && service mysql start \
+    && ./wait-for-it.sh localhost:3306 -s -t 60  \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Download and install OpenCATS
+RUN echo "Downloading and installing OpenCATS" \
+    && wget https://github.com/opencats/OpenCATS/releases/download/0.9.6/opencats-0.9.6-full.zip \
+    && unzip opencats-0.9.6-full.zip -d /var/www/opencats/ \
+    && chown -R www-data:www-data /var/www/opencats \
+    && rm opencats-0.9.6-full.zip
+
+# Create and configure Nginx
+RUN echo "Creating and configuring Nginx" \
+    && rm /etc/nginx/sites-enabled/default \
+    && echo "server { \n\
+    listen 80; \n\
+    root /var/www/opencats; \n\
+    index index.php; \n\
+    \n\
+    location / { \n\
+        try_files \$uri \$uri/ /index.php?\$query_string; \n\
+    } \n\
+    \n\
+    location ~ \.php$ { \n\
+        include fastcgi_params; \n\
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock; \n\
+        fastcgi_index index.php; \n\
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name; \n\
+    } \n\
+} " > /etc/nginx/sites-available/opencats.conf \
+    && ln -sf /etc/nginx/sites-available/opencats.conf /etc/nginx/sites-enabled/
+
+# Configure PHP
+RUN echo "upload_max_filesize = 50M \n\
+post_max_size = 50M " > /etc/php/7.4/fpm/conf.d/custom.ini
+
+# Create volume for MySQL
+RUN echo "Creating volume for MySQL" \
+    && mkdir -p /var/lib/mysql
+
+# Configure MySQL
+RUN echo "Configuring MySQL" \
+    && echo "[mysqld] \n\
+bind-address = 0.0.0.0 \n\
+default-storage-engine = innodb \n\
+innodb_file_per_table = 1 \n\
+max_allowed_packet = 64M \n\
+character-set-server = utf8mb4 \n\
+collation-server = utf8mb4_unicode_ci \n\
+user = mysql \n\
+datadir = /var/lib/mysql" > /etc/mysql/my.cnf
+
+# Import database and configure
+RUN echo "Importing the database and configuring" \
+    && service mysql start \
+    && ./wait-for-it.sh localhost:3306 -s -t 120  \
+    && echo "waiting for mysql" \
+    && mysql -uroot -e "CREATE DATABASE opencats;" \
+    && mysql -uroot -e "ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'w3resource';" \
+    && mysql -uroot -e "GRANT ALL PRIVILEGES ON opencats.* TO 'root'@'%';" \
+    && mysql -uroot opencats < /var/www/opencats/install/sql/mysql.sql
+
+# Post-installation steps for OpenCATS
+RUN echo "Post-installation steps for OpenCATS" \
+    && echo "define('DATABASE_NAME', 'opencats'); \n\
+define('DATABASE_USER', 'root'); \n\
+define('DATABASE_PASS', 'w3resource'); \n\
+define('DATABASE_HOST', 'localhost');" >> /var/www/opencats/include/config.php
+
+
+# Run container in the background
+CMD ["/bin/bash", "-c", "service mysql start && nginx -g 'daemon off;'"]
+
+# Map host directory to container's data directory
+VOLUME ["/var/lib/mysql"]

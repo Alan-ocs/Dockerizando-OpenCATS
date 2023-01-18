@@ -1,0 +1,48 @@
+# Build stage
+FROM ubuntu:latest as build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN echo "Installing dependencies" \
+    && apt-get update \
+    && apt-get install -y unzip wget apache2-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/www/opencats
+RUN echo "Downloading and installing OpenCATS" \
+    && wget https://github.com/opencats/OpenCATS/releases/download/0.9.6/opencats-0.9.6-full.zip \
+    && unzip opencats-0.9.6-full.zip -d /var/www/opencats/ \
+    && rm opencats-0.9.6-full.zip
+
+# Apache2 stage
+FROM httpd:latest
+RUN apt-get update && apt-get install -y apache2
+RUN echo "<VirtualHost *:80> \n\
+    ServerAdmin webmaster@localhost \n\
+    DocumentRoot /var/www/opencats \n\
+    <Directory /var/www/opencats> \n\
+        Options FollowSymLinks \n\
+        AllowOverride All \n\
+        Require all granted \n\
+    </Directory> \n\
+    ErrorLog ${APACHE_LOG_DIR}/error.log \n\
+    CustomLog ${APACHE_LOG_DIR}/access.log combined \n\
+</VirtualHost>" > /usr/local/apache2/conf/extra/default.conf
+
+RUN echo "Include conf/extra/default.conf" >> /usr/local/apache2/conf/httpd.conf
+EXPOSE 80
+RUN service apache2 start
+
+# PHP stage
+FROM php:latest
+RUN echo "upload_upload_max_filesize = 50M \n\
+post_max_size = 50M \n\
+max_execution_time = 300" > /usr/local/etc/php/conf.d/custom.ini
+
+# MariaDB stage
+FROM mariadb:latest
+ENV MYSQL_ROOT_PASSWORD w3resource
+ENV MYSQL_DATABASE opencats
+RUN echo "CREATE DATABASE opencats; \n\
+GRANT ALL PRIVILEGES ON opencats.* TO 'root'@'%' IDENTIFIED BY 'w3resource'; \n\
+USE opencats; \n\
+source /var/www/opencats/install/sql/mysql.sql; " > mysql.sql
+
+CMD ["/usr/sbin/apache2ctl", "-c", "service mariadb start && tail -f /var/log/mariadb/mariadb.log & httpd -D FOREGROUND"]

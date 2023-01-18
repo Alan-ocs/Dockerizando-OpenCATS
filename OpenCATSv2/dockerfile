@@ -1,0 +1,50 @@
+# Build stage
+FROM ubuntu:latest as build
+ENV DEBIAN_FRONTEND=noninteractive
+RUN echo "Installing dependencies" \
+    && apt-get update \
+    && apt-get install -y unzip wget \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/www/opencats
+RUN echo "Downloading and installing OpenCATS" \
+    && wget https://github.com/opencats/OpenCATS/releases/download/0.9.6/opencats-0.9.6-full.zip \
+    && unzip opencats-0.9.6-full.zip -d /var/www/opencats/ \
+    && rm opencats-0.9.6-full.zip
+
+# Nginx stage
+FROM nginx:latest
+RUN echo "server { \n\
+    listen 80; \n\
+    root /var/www/opencats; \n\
+    index index.php; \n\
+    \n\
+    location / { \n\
+        try_files \$uri \$uri/ /index.php?\$query_string; \n\
+    } \n\
+    \n\
+    location ~ \.php$ { \n\
+        include fastcgi_params; \n\
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock; \n\
+        fastcgi_index index.php; \n\
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name; \n\
+    } \n\
+} " > /etc/nginx/conf.d/default.conf
+EXPOSE 80
+
+# PHP stage
+FROM php:latest
+RUN echo "upload_max_filesize = 50M \n\
+post_max_size = 50M \n\
+max_execution_time = 300" > /usr/local/etc/php/conf.d/custom.ini
+
+# MySQL stage
+FROM mysql:latest
+ENV MYSQL_ROOT_PASSWORD w3resource
+ENV MYSQL_DATABASE opencats
+RUN echo "CREATE DATABASE opencats; \n\
+GRANT ALL PRIVILEGES ON opencats.* TO 'root'@'%' IDENTIFIED BY 'w3resource'; \n\
+USE opencats; \n\
+source /var/www/opencats/install/sql/mysql.sql; " > mysql.sql
+
+CMD ["/bin/bash", "-c", "service mysql start && nginx -g 'daemon off;'"]
+

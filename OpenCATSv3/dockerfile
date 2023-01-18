@@ -1,0 +1,63 @@
+# Use Ubuntu as the base image
+FROM ubuntu:latest
+
+# Set the timezone to Brazil
+ENV TZ=America/Sao_Paulo
+
+# Install necessary packages
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+    apt-get install -y wget unzip nginx mysql-server php php-mysql tzdata
+
+# Create necessary directories for OpenCATS
+RUN mkdir -p /var/www/html/opencats && \
+    mkdir -p /var/log/nginx && \
+    mkdir -p /var/lib/mysql
+
+# Download and extract OpenCATS
+RUN wget https://github.com/opencats/OpenCATS/releases/download/0.9.6/opencats-0.9.6-full.zip && \
+    unzip opencats-0.9.6-full.zip -d /var/www/html/opencats
+
+# Create and configure Nginx config file
+RUN echo "server { \n \
+    listen 80; \n \
+    server_name localhost; \n \
+    root /var/www/html/opencats; \n \
+    index index.php; \n \
+    location / { \n \
+        try_files \$uri \$uri/ /index.php?\$args; \n \
+    } \n \
+    location ~ \.php$ { \n \
+        include snippets/fastcgi-php.conf; \n \
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock; \n \
+    } \n \
+    access_log /var/log/nginx/access.log; \n \
+    error_log /var/log/nginx/error.log; \n \
+}" > /etc/nginx/sites-available/default
+
+# Create and configure PHP config file
+RUN echo "date.timezone = UTC \n \
+    upload_max_filesize = 100M \n \
+    post_max_size = 100M \n \
+    memory_limit = 256M \n \
+    max_execution_time = 180 \n \
+    max_input_time = 180 \n \
+    " > $(php --ini | grep "Loaded Configuration File" | awk '{print $4}')
+
+# Create and configure MySQL config file
+RUN echo "[mysqld] \n \
+    bind-address = 0.0.0.0 \n \
+    " > /etc/mysql/my.cnf
+
+# Configure volume for MySQL
+VOLUME /var/lib/mysql
+
+# Start MySQL and set root password
+RUN service mysql start && \
+    mysqladmin -u root password 'w3resource'
+
+# Start Nginx and PHP
+CMD service mysql start && \
+    service nginx start && \
+    systemctl start php7.4-fpm && \
+    tail -f /dev/null
